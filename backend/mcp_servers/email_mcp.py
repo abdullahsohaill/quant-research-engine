@@ -1,0 +1,251 @@
+"""
+Quant Research Engine — Email MCP Server
+
+A standalone MCP server that sends investment memos via email
+using Python's smtplib. Supports both SMTP and Gmail App Passwords.
+
+Tools exposed:
+  - send_email: Send an investment memo via email
+  - send_report_email: Send a formatted analysis report with metadata
+
+Run standalone:
+  python -m backend.mcp_servers.email_mcp
+  OR
+  fastmcp run backend/mcp_servers/email_mcp.py:mcp --transport http --port 8003
+"""
+
+import json
+import logging
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime
+
+from fastmcp import FastMCP
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ── Create MCP Server ─────────────────────────────────────────
+mcp = FastMCP(
+    "Email Delivery Server",
+    description="Sends investment memos and analysis reports via email. "
+    "Supports SMTP with TLS and Gmail App Passwords.",
+)
+
+# ── Email Configuration ───────────────────────────────────────
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # Gmail App Password
+FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
+FROM_NAME = os.getenv("FROM_NAME", "Quant Research Engine")
+
+
+def _create_html_report(subject: str, body_markdown: str, metadata: dict | None = None) -> str:
+    """Convert markdown report to styled HTML email."""
+    # Simple markdown-to-html conversion for key patterns
+    html_body = body_markdown
+    # Convert markdown headers
+    import re
+    html_body = re.sub(r'^### (.+)$', r'<h3 style="color: #3b82f6; margin-top: 20px;">\1</h3>', html_body, flags=re.MULTILINE)
+    html_body = re.sub(r'^## (.+)$', r'<h2 style="color: #1e40af; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px;">\1</h2>', html_body, flags=re.MULTILINE)
+    html_body = re.sub(r'^# (.+)$', r'<h1 style="color: #111827;">\1</h1>', html_body, flags=re.MULTILINE)
+    # Convert bold
+    html_body = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html_body)
+    # Convert line breaks
+    html_body = html_body.replace('\n', '<br>\n')
+
+    meta_section = ""
+    if metadata:
+        meta_items = []
+        if metadata.get("elapsed_seconds"):
+            meta_items.append(f"⏱️ Analysis Time: {metadata['elapsed_seconds']}s")
+        if metadata.get("tool_calls"):
+            meta_items.append(f"🔧 Tool Calls: {len(metadata['tool_calls'])}")
+        if metadata.get("model"):
+            meta_items.append(f"🤖 Model: {metadata['model']}")
+        meta_section = '<br>'.join(meta_items)
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                line-height: 1.6;
+                color: #1f2937;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f9fafb;
+            }}
+            .header {{
+                background: linear-gradient(135deg, #1e40af, #3b82f6);
+                color: white;
+                padding: 24px;
+                border-radius: 12px 12px 0 0;
+                text-align: center;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 20px;
+            }}
+            .header .subtitle {{
+                opacity: 0.8;
+                font-size: 13px;
+                margin-top: 4px;
+            }}
+            .content {{
+                background: white;
+                padding: 24px;
+                border-radius: 0 0 12px 12px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            .metadata {{
+                background: #f0f9ff;
+                border: 1px solid #bae6fd;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 13px;
+                color: #0c4a6e;
+                margin-bottom: 20px;
+            }}
+            .footer {{
+                text-align: center;
+                font-size: 11px;
+                color: #9ca3af;
+                margin-top: 20px;
+                padding: 12px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 12px 0;
+            }}
+            th, td {{
+                padding: 8px 12px;
+                border: 1px solid #e5e7eb;
+                text-align: left;
+            }}
+            th {{
+                background: #f3f4f6;
+                font-weight: 600;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📊 {subject}</h1>
+            <div class="subtitle">Generated by Quant Research Engine • {datetime.now().strftime('%B %d, %Y')}</div>
+        </div>
+        <div class="content">
+            {f'<div class="metadata">{meta_section}</div>' if meta_section else ''}
+            {html_body}
+        </div>
+        <div class="footer">
+            This report was generated by an AI system. It does not constitute financial advice.<br>
+            Quant Research Engine &copy; 2025
+        </div>
+    </body>
+    </html>
+    """
+
+
+@mcp.tool()
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+) -> str:
+    """
+    Send an email with the given subject and body.
+
+    Args:
+        to: Recipient email address
+        subject: Email subject line
+        body: Email body content (plain text or markdown)
+
+    Returns:
+        JSON string with send status
+    """
+    if not SMTP_USER or not SMTP_PASSWORD:
+        return json.dumps({
+            "success": False,
+            "error": "Email not configured. Set SMTP_USER and SMTP_PASSWORD environment variables.",
+            "hint": "For Gmail, use an App Password from https://myaccount.google.com/apppasswords",
+        })
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{FROM_NAME} <{FROM_EMAIL}>"
+        msg["To"] = to
+        msg["Subject"] = subject
+
+        # Attach both plain text and HTML versions
+        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(_create_html_report(subject, body), "html"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+
+        logger.info(f"Email sent to {to}: {subject}")
+        return json.dumps({
+            "success": True,
+            "message": f"Email sent successfully to {to}",
+            "subject": subject,
+        })
+
+    except smtplib.SMTPAuthenticationError:
+        logger.error("SMTP authentication failed")
+        return json.dumps({
+            "success": False,
+            "error": "SMTP authentication failed. Check your credentials.",
+        })
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        return json.dumps({
+            "success": False,
+            "error": f"Failed to send email: {str(e)}",
+        })
+
+
+@mcp.tool()
+def send_report_email(
+    to: str,
+    report: str,
+    ticker: str = "",
+    critique: str = "",
+) -> str:
+    """
+    Send a formatted investment analysis report via email.
+
+    Creates a professionally styled HTML email from the analysis report.
+
+    Args:
+        to: Recipient email address
+        report: The investment memo/report content in markdown
+        ticker: Stock ticker(s) analyzed (for the subject line)
+        critique: Optional critic review to include
+
+    Returns:
+        JSON string with send status
+    """
+    subject = f"Investment Analysis: {ticker}" if ticker else "Investment Analysis Report"
+
+    full_body = report
+    if critique:
+        full_body += f"\n\n---\n\n## 🔎 Quality Review\n\n{critique}"
+
+    return send_email(to=to, subject=subject, body=full_body)
+
+
+if __name__ == "__main__":
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8003
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
