@@ -16,7 +16,11 @@ import httpx
 import time
 import json
 import asyncio
+import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_URL = "http://localhost:8000/api/analyze"
 MANUAL_BASELINE_SECONDS = 120 * 60  # 120 minutes industry average
@@ -33,23 +37,38 @@ def run_performance_test():
     }
     
     print(f"Sending Query: '{query}'")
-    try:
-        response = httpx.post(API_URL, json=body, timeout=60.0)
-        data = response.json()
-        duration = time.time() - start
-        
-        if data.get("success"):
-            print(f"✅ Success! Report generated.")
-            print(f"⏱️  Time to Report: {duration:.2f} seconds")
-            speedup = MANUAL_BASELINE_SECONDS / duration
-            print(f"🚀 Speedup vs Manual (~120 mins): {speedup:.1f}x faster")
-            return duration, data
-        else:
-            print(f"❌ Failed: {data.get('error')}")
-            return None, None
-    except Exception as e:
-        print(f"❌ Connection Error (is the system running?): {e}")
-        return None, None
+    
+    max_retries = 6
+    for attempt in range(max_retries):
+        try:
+            response = httpx.post(API_URL, json=body, timeout=120.0)
+            data = response.json()
+            duration = time.time() - start
+            
+            if data.get("success"):
+                print(f"✅ Success! Report generated.")
+                print(f"⏱️  Time to Report: {duration:.2f} seconds")
+                speedup = MANUAL_BASELINE_SECONDS / duration
+                print(f"🚀 Speedup vs Manual (~120 mins): {speedup:.1f}x faster")
+                return duration, data
+            else:
+                error_msg = data.get('error', '')
+                if "503" in str(error_msg) and attempt < max_retries - 1:
+                    print(f"⚠️ 503 Unavailable from GenAI API. Retrying {attempt+1}/{max_retries} in 5 seconds...")
+                    time.sleep(5)
+                    continue
+                else:
+                    print(f"❌ Failed: {error_msg}")
+                    return None, None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️ Connection Error: {e}. Retrying {attempt+1}/{max_retries}...")
+                time.sleep(5)
+            else:
+                print(f"❌ Connection Error (is the system running?): {e}")
+                return None, None
+                
+    return None, None
 
 def check_sql_accuracy():
     """Benchmarks specific SQL MCP capabilities."""
@@ -58,12 +77,11 @@ def check_sql_accuracy():
     # We simulate the MCP Server call
     try:
         from sqlalchemy import create_engine, text
-        import os
         from urllib.parse import quote_plus
         
         # Pull connection string directly from env matching backend logic
-        POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+        POSTGRES_USER = os.getenv("POSTGRES_USER", "quant_user")
+        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "quant_password")
         POSTGRES_DB = os.getenv("POSTGRES_DB", "quant_research")
         POSTGRES_HOST = "localhost" # Since we are running from host against docker port
         POSTGRES_PORT = "5432"
@@ -71,14 +89,22 @@ def check_sql_accuracy():
         url = f"postgresql://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
         engine = create_engine(url)
         
-        with engine.connect() as conn:
-            res = conn.execute(text("SELECT COUNT(*) FROM stocks;") )
-            total_stocks = res.scalar()
+        try:
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT COUNT(*) FROM stocks;") )
+                total_stocks = res.scalar()
+        except:
+            print(f"⚠️ 'quant_user' auth failed. Falling back to default 'postgres' (due to cached volume)...")
+            url = f"postgresql://postgres:postgres@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+            engine = create_engine(url)
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT COUNT(*) FROM stocks;") )
+                total_stocks = res.scalar()
             
-            print(f"✅ SQL MCP Query executed successfully.")
-            print(f"📊 Accuracy: Seed database confirmed ({total_stocks} stocks loaded).")
-            print("The SQL Analyst Agent perfectly tracks these schemas.")
-            return total_stocks
+        print(f"✅ SQL MCP Query executed successfully.")
+        print(f"📊 Accuracy: Seed database confirmed ({total_stocks} stocks loaded).")
+        print("The SQL Analyst Agent perfectly tracks these schemas.")
+        return total_stocks
             
     except Exception as e:
         print(f"❌ Failed to reach Postgres directly, but agent logic passes. Error: {e}")

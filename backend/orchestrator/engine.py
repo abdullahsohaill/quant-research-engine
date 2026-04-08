@@ -152,12 +152,11 @@ class AnalysisEngine:
         task = self.bus.create_task("planner", "data_fetcher", "Fetch required financial data.")
 
         # Give it access to financial tools only
-        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" not in d.name and "email" not in d.name]
+        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" not in d["name"] and "email" not in d["name"]]
         tools = [types.Tool(function_declarations=declarations)] if declarations else None
 
         config = types.GenerateContentConfig(system_instruction=DATA_FETCHER_PROMPT, tools=tools, temperature=0.2)
-        
-        contents = [types.Content(role="user", parts=[types.Part.from_text(f"Query: {state['query']}\nPlan: {state['plan']}")])]
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=f"Query: {state['query']}\nPlan: {state['plan']}")])]
         
         # Tool loop for Data Fetcher (simplified iter limit = 3)
         for _ in range(3):
@@ -198,11 +197,11 @@ class AnalysisEngine:
         task = self.bus.create_task("planner", "sql_analyst", "Query Postgres for historical trends.")
 
         # Give it access to SQL tools only
-        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" in d.name or "table_" in d.name or "sample_" in d.name]
+        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" in d["name"] or "table_" in d["name"] or "sample_" in d["name"]]
         tools = [types.Tool(function_declarations=declarations)] if declarations else None
 
         config = types.GenerateContentConfig(system_instruction=SQL_ANALYST_PROMPT, tools=tools, temperature=0.1)
-        contents = [types.Content(role="user", parts=[types.Part.from_text(f"Query: {state['query']}")])]
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=f"Query: {state['query']}")])]
         
         for _ in range(3):
             response = self.client.models.generate_content(model=settings.gemini_model, contents=contents, config=config)
@@ -242,11 +241,11 @@ class AnalysisEngine:
 
         prompt = f"Data Summary:\n{state.get('data_summary', '')}\n\nSQL Summary:\n{state.get('sql_summary', '')}\n\nPlease perform quantitative analysis."
         
-        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" not in d.name and "email" not in d.name]
+        declarations = [d for d in self.tool_registry.get_genai_declarations() if "sql" not in d["name"] and "email" not in d["name"]]
         tools = [types.Tool(function_declarations=declarations)] if declarations else None
 
         config = types.GenerateContentConfig(system_instruction=QUANT_PROMPT, tools=tools, temperature=0.3)
-        contents = [types.Content(role="user", parts=[types.Part.from_text(prompt)])]
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
         
         for _ in range(3):
             response = self.client.models.generate_content(model=settings.gemini_model, contents=contents, config=config)
