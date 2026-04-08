@@ -1,0 +1,45 @@
+# ============================================
+# Quant Research Engine — Backend Dependencies
+# ============================================
+
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Google GenAI SDK (Native — No LangChain)
+google-genai==1.14.0
+
+# MCP Protocol
+fastmcp==2.5.1
+mcp==1.9.0
+
+# Multi-Agent Framework & APIs
+huggingface-hub>=0.23.0
+langgraph>=0.1.0
+langchain-core>=0.2.0
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+alembic==1.14.1
+
+# Financial Data
+yfinance==0.2.51
+pandas==2.2.3
+plotly==5.24.1
+
+# Data Validation
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# HTTP Client
+httpx==0.28.1
+aiohttp==3.11.11
+
+# Utilities
+python-dotenv>=1.1.0
+python-multipart==0.0.20
+
+# SSE for streaming
+sse-starlette==2.2.1

@@ -1,0 +1,151 @@
+# ============================================================
+# Quant Research Engine — Docker Compose
+# ============================================================
+# Spins up the full system:
+#   1. PostgreSQL database (port 5432)
+#   2. Financial Data MCP Server (port 8001)
+#   3. PostgreSQL MCP Server (port 8002)
+#   4. FastAPI Backend (port 8000)
+#   5. React Frontend (port 3000)
+#
+# Usage:
+#   docker-compose up --build
+#   docker-compose up -d  (detached)
+# ============================================================
+
+services:
+  # ── PostgreSQL Database ─────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: qre-postgres
+    environment:
+      POSTGRES_USER: quant_user
+      POSTGRES_PASSWORD: quant_password
+      POSTGRES_DB: quant_research
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant_user -d quant_research"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qre-network
+
+  # ── Financial Data MCP Server ───────────────────────────────
+  financial-mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qre-financial-mcp
+    command: python -m backend.run_mcp --server financial --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      PYTHONPATH: /app
+    networks:
+      - qre-network
+    restart: unless-stopped
+
+  # ── PostgreSQL MCP Server ───────────────────────────────────
+  postgres-mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qre-postgres-mcp
+    command: python -m backend.run_mcp --server postgres --port 8002
+    ports:
+      - "8002:8002"
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL_SYNC: postgresql://quant_user:quant_password@postgres:5432/quant_research
+      DATABASE_URL: postgresql://quant_user:quant_password@postgres:5432/quant_research
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qre-network
+    restart: unless-stopped
+
+  # ── FastAPI Backend ─────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qre-backend
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHONPATH: /app
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: quant_user
+      POSTGRES_PASSWORD: quant_password
+      POSTGRES_DB: quant_research
+      FINANCIAL_MCP_HOST: financial-mcp
+      FINANCIAL_MCP_PORT: 8001
+      POSTGRES_MCP_HOST: postgres-mcp
+      POSTGRES_MCP_PORT: 8002
+      EMAIL_MCP_HOST: email-mcp
+      EMAIL_MCP_PORT: 8003
+      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_CRITIC_MODEL: gemini-2.5-flash
+      HF_TOKEN: ${HF_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      financial-mcp:
+        condition: service_started
+      postgres-mcp:
+        condition: service_started
+      email-mcp:
+        condition: service_started
+    networks:
+      - qre-network
+    restart: unless-stopped
+
+  # ── Email MCP Server ──────────────────────────────────────────
+  email-mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qre-email-mcp
+    command: python -m backend.run_mcp --server email --port 8003
+    ports:
+      - "8003:8003"
+    environment:
+      PYTHONPATH: /app
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      FROM_EMAIL: ${FROM_EMAIL}
+      FROM_NAME: ${FROM_NAME}
+    networks:
+      - qre-network
+    restart: unless-stopped
+
+  # ── React Frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: qre-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - qre-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  qre-network:
+    driver: bridge
